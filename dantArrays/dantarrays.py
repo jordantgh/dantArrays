@@ -72,21 +72,22 @@ class ComputedField:
     def __call__(self, context: ArrayContext) -> Any:
         """Generate a value using the provided context"""
         return self.factory_func(context)
-        
+
     @classmethod
     def __get_pydantic_core_schema__(
-        cls, 
+        cls,
         _source_type: Any,
-        _handler: Callable[[Any], core_schema.CoreSchema]
+        _handler: Callable[[Any], core_schema.CoreSchema],
     ) -> core_schema.CoreSchema:
         """
         Define how Pydantic should handle ComputedField instances.
-        
+
         We create a schema that validates that the value is a ComputedField
         instance but doesn't transform it, since the actual value will be
         computed later when the metadata is accessed.
         """
         return core_schema.is_instance_schema(ComputedField)
+
 
 # Convenience functions for common computed field patterns
 
