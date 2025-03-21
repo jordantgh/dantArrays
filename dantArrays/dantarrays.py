@@ -388,6 +388,51 @@ class MetadataArray:
         # Use Pydantic's model_copy with update
         self._metadata[idx] = metadata.model_copy(update=kwargs)
 
+    def batch_create(
+        self,
+        indices: list[int],
+        overwrite_existing: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Create metadata objects for multiple indices at once.
+
+        Args:
+            indices: List of indices to create metadata for
+            overwrite_existing: Whether to overwrite existing metadata
+            **kwargs: Initial field values for all created metadata objects
+
+        Raises:
+            IndexError: If any index is out of bounds
+            ValueError: If any field name is invalid
+        """
+        # Validate all indices first
+        for idx in indices:
+            self._validate_index(idx)
+
+        # Validate field names
+        if kwargs:
+            # Create a temporary instance to check fields
+            temp = self.metadata_class()
+            for field in kwargs:
+                if field not in temp.model_fields:
+                    valid_fields = list(temp.model_fields.keys())
+                    raise ValueError(
+                        f"Invalid field '{field}'. Valid fields: {valid_fields}"
+                    )
+
+        # Create metadata for each index
+        for idx in indices:
+            # Skip if metadata exists and we're not overwriting
+            if self.has_metadata(idx) and not overwrite_existing:
+                continue
+
+            # Create metadata with the provided kwargs
+            metadata = self.metadata_class(**kwargs)
+
+            # Set the metadata (this will resolve computed fields)
+            self.set_metadata(idx, metadata)
+
     def batch_update(
         self, indices: list[int], create_default: bool = True, **kwargs: Any
     ) -> None:
