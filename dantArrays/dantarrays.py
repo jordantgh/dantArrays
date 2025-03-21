@@ -52,7 +52,7 @@ class ArrayContext:
                 self.index if i == self.axis else slice(None)
                 for i in range(len(self.shape))
             )
-            return self.array[slices]
+            return self.array[slices].copy()
 
 
 class ComputedField:
