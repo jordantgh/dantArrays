@@ -1,12 +1,13 @@
-from typing import Optional, Type, TypeVar, List
+from typing import Optional, Type, TypeVar, List, Callable
 import numpy as np
+from pydantic import BaseModel
 
 
 # Define a context generator for default values
 class MetaDefault:
     """Smart default generator with access to array context"""
 
-    def __init__(self, factory_func=None):
+    def __init__(self, factory_func: Optional[Callable] = None):
         self.factory_func = factory_func or (
             lambda idx, shape, axis: f"Item_{idx}"
         )
@@ -16,7 +17,7 @@ class MetaDefault:
 
 
 # Convenience function to generate index-based names
-def index_field(prefix="Item_", suffix=""):
+def index_field(prefix: str = "Item_", suffix: str = ""):
     return MetaDefault(lambda idx, shape, axis: f"{prefix}{idx}{suffix}")
 
 
@@ -27,7 +28,7 @@ def dimension_field():
     )
 
 
-T = TypeVar("T")
+T = TypeVar("T", bound=BaseModel)
 
 
 class MetadataArray:
@@ -43,7 +44,7 @@ class MetadataArray:
 
         Args:
             data: NumPy array to wrap
-            metadata_class: Class to use for metadata (dataclass or Pydantic model)
+            metadata_class: Pydantic model class to use for metadata
             major_axis: 0 for row metadata, 1 for column metadata
             metadata: Optional pre-existing metadata list
         """
@@ -64,28 +65,15 @@ class MetadataArray:
                 )
             self._metadata = metadata
 
-        # Determine field access based on class type
-        self.is_pydantic = (
-            hasattr(metadata_class, "model_fields")
-            if hasattr(metadata_class, "__module__")
-            and "pydantic" in metadata_class.__module__
-            else False
-        )
-
-    def _resolve_defaults(self, instance, idx):
+    def _resolve_defaults(self, instance: T, idx: int) -> None:
         """Resolve any MetaDefault objects in the instance"""
-        # Get the attributes to check based on class type
-        if self.is_pydantic:
-            attrs = instance.model_fields.keys()
-        else:  # dataclass
-            attrs = instance.__dict__.keys()
-
-        # Resolve any MetaDefault values
-        for attr in attrs:
-            value = getattr(instance, attr)
+        for field_name in instance.model_fields.keys():
+            value = getattr(instance, field_name)
             if isinstance(value, MetaDefault):
                 setattr(
-                    instance, attr, value(idx, self.data.shape, self.major_axis)
+                    instance,
+                    field_name,
+                    value(idx, self.data.shape, self.major_axis),
                 )
 
     def __getitem__(self, idx):
@@ -117,22 +105,13 @@ class MetadataArray:
         # Get existing metadata or create default
         metadata = self.get_metadata(idx)
 
-        if self.is_pydantic:
-            # For Pydantic models, use model_copy with update
-            self._metadata[idx] = metadata.model_copy(update=kwargs)
-        else:
-            # For dataclasses, update directly
-            for field, value in kwargs.items():
-                setattr(metadata, field, value)
+        # Process any MetaDefault values in the updates
+        for field, value in list(kwargs.items()):
+            if isinstance(value, MetaDefault):
+                kwargs[field] = value(idx, self.data.shape, self.major_axis)
 
-            # Resolve any MetaDefault values in the updates
-            for field, value in kwargs.items():
-                if isinstance(value, MetaDefault):
-                    setattr(
-                        metadata,
-                        field,
-                        value(idx, self.data.shape, self.major_axis),
-                    )
+        # Use Pydantic's model_copy with update
+        self._metadata[idx] = metadata.model_copy(update=kwargs)
 
     def batch_update(self, indices, **kwargs) -> None:
         """Update metadata for multiple indices at once"""
@@ -172,23 +151,23 @@ class MetadataArray:
 class MetadataAccessor:
     """Helper class for ergonomic access to metadata fields"""
 
-    def __init__(self, parent, idx):
+    def __init__(self, parent: MetadataArray, idx: int):
         self._parent = parent
         self._idx = idx
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         """Access metadata fields as attributes"""
         if name.startswith("_"):
             return super().__getattr__(name)
 
         metadata = self._parent.get_metadata(self._idx)
-        if hasattr(metadata, name):
+        if name in metadata.model_fields:
             return getattr(metadata, name)
         raise AttributeError(
             f"{metadata.__class__.__name__} has no attribute '{name}'"
         )
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: str, value):
         """Set metadata fields as attributes"""
         if name in ["_parent", "_idx"]:
             super().__setattr__(name, value)
