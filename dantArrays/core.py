@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, Type, TypeVar, Callable, Any, cast
 import numpy as np
 from pydantic import BaseModel
@@ -10,7 +11,6 @@ from .utils import (
     UnsafeDataAccessWarning,
     _internal_access,
 )
-
 from .computed import (
     ComputedFieldContext,
     COMPUTED_FACTORY_KEY,
@@ -95,8 +95,8 @@ class DantArray:
     @property
     @internal_method
     def data(self) -> np.ndarray:
-        """Get a read-only view of the underlying numpy array"""
-        return self._data_unsafe.view()
+        """Get a read-only copy of the underlying numpy array."""
+        return self._data_unsafe.copy()
 
     @data.setter
     @internal_method
@@ -550,29 +550,41 @@ class DantArray:
         """
         Create a copy of this DantArray
 
+        vbnet
+        Copy code
         Args:
-            deep_metadata: Whether to perform a deep copy of metadata (True) or shallow copy (False)
+            deep_metadata: Whether to perform a deep copy of metadata (True)
+                        or reuse existing references (False).
+                        - True => new metadata objects with no shared state
+                        - False => new list object, but references to original
+                                    metadata objects
 
         Returns:
-            New DantArray with copied data and metadata
+            New DantArray with copied data and shallow or deep-copied metadata
         """
-        # Copy metadata if it exists
-        copied_metadata = []
-        for m in self._metadata:
-            if m is not None:
-                copied_metadata.append(m.model_copy(deep=deep_metadata))
-            else:
-                copied_metadata.append(None)
+        # Always copy the NumPy array data
+        new_data = self.data.copy()
+
+        if deep_metadata:
+            # Deep copy: create entirely new metadata model objects
+            copied_metadata = []
+            for m in self._metadata:
+                if m is not None:
+                    copied_metadata.append(m.model_copy(deep=True))
+                else:
+                    copied_metadata.append(None)
+        else:
+            # Shallow copy: new list, but referencing the same metadata objects
+            copied_metadata = list(self._metadata)
 
         return DantArray(
-            data=self.data.copy(),
+            data=new_data,
             metadata_class=self.metadata_class,
             major_axis=self.major_axis,
             metadata=copied_metadata,
         )
 
     # Immutable modification methods
-
     def with_updated_data(self, new_data: np.ndarray) -> "DantArray":
         """
         Create a new DantArray with updated data and recomputed fields
