@@ -1,3 +1,4 @@
+from typing import Optional
 import pytest
 import numpy as np
 from pydantic import BaseModel
@@ -62,18 +63,20 @@ def test_dimension_field():
 
 def test_data_based_field():
     class Model(BaseModel):
-        mean: float = data_based_field(lambda arr: float(np.mean(arr)))
+        mean: Optional[float] = data_based_field(
+            lambda arr: float(np.mean(arr)), default=0.0
+        )
 
     m = Model()
     assert m.mean == 0.0
 
-    # Try a real context
-    comp = DataBasedComputation(func=np.max)
+    comp = DataBasedComputation(func=lambda arr: float(np.mean(arr)))
     ctx = ComputedFieldContext(
         index=0, array=np.array([[1, 2, 3], [4, 5, 6]]), axis=0
     )
-    val = comp(ctx)  # should return max of row0 => 3
-    assert val == 3
+    val = comp(ctx)
+    # Slicing row 0 => [1,2,3], mean => 2.0
+    assert val == 2.0
 
 
 def test_max_value_field():

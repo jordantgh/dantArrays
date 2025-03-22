@@ -387,7 +387,10 @@ def test_copy_deep(dantarr_2x3_simplemeta):
     # The metadata objects should also be distinct
     assert arr_copy._metadata[0] is not dantarr_2x3_simplemeta._metadata[0]
     # But they should be equivalent in content
-    assert arr_copy.meta(0).dict() == dantarr_2x3_simplemeta.meta(0).dict()
+    assert (
+            arr_copy.meta(0).get().model_dump()  # Get full model via accessor
+            == dantarr_2x3_simplemeta.meta(0).get().model_dump()
+        )
 
 
 # ---------------------------------------------------------------------------
