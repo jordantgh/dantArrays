@@ -1,7 +1,6 @@
 import threading
 import functools
 from contextlib import contextmanager
-import warnings
 import numpy as np
 
 # Thread-local storage
