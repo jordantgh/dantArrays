@@ -1,6 +1,6 @@
 [project]
 name = "dantArrays"
-version = "0.0.1"
+version = "0.0.2"
 description = "A thin wrapper over np.ndarray to provide an intuitive interface for attaching pydantic models as metadata to arrays."
 authors = [{ name = "Jordan Taylor", email = "jtaylor81284@gmail.com" }]
 readme = "README.md"
