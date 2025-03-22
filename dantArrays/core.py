@@ -224,43 +224,39 @@ class DantArray:
         return COMPUTED_FACTORY_KEY in extra
 
     def _resolve_computed_fields(self, instance: T, idx: int) -> None:
-        """Resolve computed fields for a metadata instance"""
+        """
+        Resolve computed fields for a metadata instance, respecting user overrides
+        """
         context = ComputedFieldContext(idx, self.data, self.major_axis)
 
-        # Initialize storage for computed field factories
+        # Initialize storage for computed field factories if needed
         if not hasattr(instance, "_computed_field_factories"):
             instance._computed_field_factories = {}
 
-        # Process each field
+        # Process each field in the model
         for field_name, field_info in instance.model_fields.items():
             extra = getattr(field_info, "json_schema_extra", {}) or {}
 
             # Check if this is a computed field
             if self._is_computed_field(field_info):
-                extra = field_info.json_schema_extra or {}
                 factory = extra[COMPUTED_FACTORY_KEY]
                 writable = extra.get(COMPUTED_WRITABLE_KEY, False)
 
-                # Store factory for future recalculation
-                instance._computed_field_factories[field_name] = {
-                    "factory": factory,
-                    "writable": writable,
-                }
-                # Get current value
-                current_value = getattr(instance, field_name)
-                default_value = field_info.default
+                # Ensure we track override status
+                if field_name not in instance._computed_field_factories:
+                    instance._computed_field_factories[field_name] = {
+                        "factory": factory,
+                        "writable": writable,
+                        "user_overridden": False,
+                        "last_computed_value": None,
+                    }
+                meta_info = instance._computed_field_factories[field_name]
 
-                # Only compute if:
-                # 1. Field is None, or
-                # 2. Field is not writable, or
-                # 3. Field has default value
-                if (
-                    current_value is None
-                    or not writable
-                    or current_value == default_value
-                ):
+                # If field not writable, always recompute; if writable but not overridden, still recompute
+                if (not writable) or (not meta_info["user_overridden"]):
                     computed_value = factory(context)
                     setattr(instance, field_name, computed_value)
+                    meta_info["last_computed_value"] = computed_value
 
     def __getitem__(self, idx: Any) -> np.ndarray:
         """Support for standard NumPy indexing"""
@@ -333,7 +329,12 @@ class DantArray:
     def update_metadata(
         self, idx: int, create_default: bool = True, **kwargs: Any
     ) -> None:
-        """Update specific metadata fields for the given index"""
+        """
+        Update specific metadata fields for the given index.
+
+        For writable computed fields, if the user-provided value differs from
+        the last automatically computed value, we consider it a user override.
+        """
         self._validate_index(idx)
 
         # Get existing metadata or create default
@@ -349,32 +350,36 @@ class DantArray:
                     f"Invalid field '{field}'. Valid fields: {valid_fields}"
                 )
 
-        # Check for computed fields that shouldn't be updated
-        non_writable_fields = []
-        for field_name in list(kwargs.keys()):
-            if (
-                hasattr(metadata, "_computed_field_factories")
-                and field_name in metadata._computed_field_factories
-            ):
-                field_info = metadata._computed_field_factories[field_name]
-                if not field_info.get("writable", False):
-                    non_writable_fields.append(field_name)
+        # Prepare a new metadata object by copying/updating
+        old_metadata = metadata
+        new_metadata = metadata.model_copy(update=kwargs)
 
-        # Raise error if attempting to update non-writable computed fields
-        if non_writable_fields:
-            if len(non_writable_fields) == 1:
-                raise ValueError(
-                    f"Field '{non_writable_fields[0]}' is computed and not writable. "
-                    f"You cannot directly update this field."
-                )
-            else:
-                raise ValueError(
-                    f"Fields {non_writable_fields} are computed and not writable. "
-                    f"You cannot directly update these fields."
-                )
+        # Replicate computed field factories so we keep override info
+        if not hasattr(old_metadata, "_computed_field_factories"):
+            old_metadata._computed_field_factories = {}
+        new_metadata._computed_field_factories = copy.deepcopy(
+            old_metadata._computed_field_factories
+        )
 
-        # Use Pydantic's model_copy with update
-        self._metadata[idx] = metadata.model_copy(update=kwargs)
+        # Check for computed fields that shouldn't be updated or mark them overridden
+        for field_name, new_value in kwargs.items():
+            if field_name in new_metadata._computed_field_factories:
+                info = new_metadata._computed_field_factories[field_name]
+                if not info["writable"]:
+                    # Non-writable computed field => error
+                    raise ValueError(
+                        f"Field '{field_name}' is computed and not writable. "
+                        f"You cannot directly update this field."
+                    )
+                else:
+                    # If user sets a value that differs from the last auto-computed,
+                    # we consider it an override
+                    last_val = info.get("last_computed_value", None)
+                    if last_val is None or new_value != last_val:
+                        info["user_overridden"] = True
+
+        # Store the updated metadata
+        self._metadata[idx] = new_metadata
 
     def batch_create(
         self,
@@ -507,7 +512,7 @@ class DantArray:
 
     @internal_method  # not strictly needed, but future-proofing
     def refresh_computed_fields(self) -> None:
-        """Refresh all computed fields in all metadata instances"""
+        """Refresh all computed fields in all metadata instances."""
         for idx in range(self.data.shape[self.major_axis]):
             metadata = self.get_metadata(idx, create_default=False)
             if metadata is None:
@@ -517,20 +522,7 @@ class DantArray:
             if not hasattr(metadata, "_computed_field_factories"):
                 continue
 
-            context = ComputedFieldContext(idx, self.data, self.major_axis)
-            updates = {}
-
-            # Use the stored factory functions to recompute values
-            for (
-                field_name,
-                field_info,
-            ) in metadata._computed_field_factories.items():
-                factory = field_info.get("factory")
-                if factory:
-                    updates[field_name] = factory(context)
-
-            if updates:
-                self._metadata[idx] = metadata.model_copy(update=updates)
+            self._resolve_computed_fields(metadata, idx)
 
     @property
     @internal_method
@@ -634,20 +626,57 @@ class DantArray:
             metadata, "_computed_field_factories"
         ):
             context = ComputedFieldContext(idx, result.data, result.major_axis)
-            updates = {}
-
-            for (
-                field_name,
-                field_info,
-            ) in metadata._computed_field_factories.items():
-                factory = field_info.get("factory")
-                if factory:
-                    updates[field_name] = factory(context)
-
-            if updates:
-                result._metadata[idx] = metadata.model_copy(update=updates)
+            for field_name, info in metadata._computed_field_factories.items():
+                if (not info["writable"]) or (not info["user_overridden"]):
+                    computed_value = info["factory"](context)
+                    setattr(metadata, field_name, computed_value)
+                    info["last_computed_value"] = computed_value
 
         return result
+
+    def re_enable_computed_field(
+        self, idx: int, field_name: str, recompute: bool = True
+    ) -> None:
+        """
+        Re-enable automatic recomputation for a previously overridden writable computed field.
+
+        Optionally triggers an immediate recomputation of the field.
+
+        Args:
+            idx: The index of the metadata item
+            field_name: The name of the computed field
+            recompute: Whether to immediately recompute the field after re-enabling
+
+        Raises:
+            ValueError: If the field is not found or is not writable
+        """
+        self._validate_index(idx)
+        metadata = self.get_metadata(idx, create_default=False)
+        if metadata is None:
+            raise ValueError(f"No metadata exists at index {idx}.")
+
+        if not hasattr(metadata, "_computed_field_factories"):
+            raise ValueError("No computed fields exist in this metadata.")
+
+        field_info = metadata._computed_field_factories.get(field_name)
+        if field_info is None:
+            raise ValueError(
+                f"Field '{field_name}' is not recognized as computed."
+            )
+        if not field_info["writable"]:
+            raise ValueError(
+                f"Cannot re-enable a non-writable field '{field_name}'."
+            )
+
+        # Reset override status
+        field_info["user_overridden"] = False
+
+        # Optionally recompute immediately
+        if recompute:
+            context = ComputedFieldContext(idx, self.data, self.major_axis)
+            new_value = field_info["factory"](context)
+            setattr(metadata, field_name, new_value)
+            field_info["last_computed_value"] = new_value
 
 
 class MetadataAccessor:
