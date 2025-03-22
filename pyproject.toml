@@ -23,7 +23,9 @@ classifiers = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+  "pytest>=6.2.5",
+]
 
 [build-system]
 requires = ["hatchling"]
