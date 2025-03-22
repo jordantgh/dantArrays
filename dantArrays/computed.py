@@ -152,7 +152,9 @@ def dimension_field() -> str:
     return computed(DimensionInfoComputation(), default="")
 
 
-def data_based_field(func: Callable[[np.ndarray], R]) -> R:
+def data_based_field(
+    func: Callable[[np.ndarray], R], default: Optional[R] = None
+) -> R:
     """
     Create a metadata field based on the array data
 
@@ -162,7 +164,7 @@ def data_based_field(func: Callable[[np.ndarray], R]) -> R:
     Returns:
         Field with the type matching the return type of the function
     """
-    return computed(DataBasedComputation(func))
+    return computed(DataBasedComputation(func), default=default)
 
 
 def max_value_field() -> float:
